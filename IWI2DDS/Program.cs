@@ -29,7 +29,7 @@ namespace IWI2DDS
             return true;
         }
         
-        public static int[] GetSize(ref byte[] data)
+        public static int[] GetTextureSize(ref byte[] data)
         {
             int[] rval = new int[2];
             if (data.Length > 0x6)
@@ -40,7 +40,7 @@ namespace IWI2DDS
             return rval;
         }
 
-        public static int GetTextureSize(ref byte[] data)
+        public static int GetTextureDataSize(ref byte[] data)
         {
             int file_size = BitConverter.ToInt32(data, 0xC); //file size
             int texture_offset = BitConverter.ToInt32(data, 0x10); //texture offset
@@ -54,17 +54,17 @@ namespace IWI2DDS
         {
             return data[5];
         }
-        public static void SaveDDS(ref byte[] data, string output)
+        public static void SaveDDS(ref byte[] data, string output) //use ref so it doesn't make copies of the data, references it directly instead
         {
             //Generate the dds header
-            int[] texture_size = GetSize(ref data);
+            int[] texture_size = GetTextureSize(ref data);
             DDS_HEADER header = new DDS_HEADER();
             int magic = ('D' << 0) | ('D' << 8) | ('S' << 16) | (' ' << 24);
             header.dwSize = 124;
             header.dwFlags = (int)(DDS_FLAGS.DDSD_CAPS | DDS_FLAGS.DDSD_HEIGHT | DDS_FLAGS.DDSD_WIDTH | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_LINEARSIZE);
             header.dwWidth = texture_size[0];
             header.dwHeight = texture_size[1];
-            header.dwPitchOrLinearSize = GetTextureSize(ref data);
+            header.dwPitchOrLinearSize = GetTextureDataSize(ref data);
             header.px_dwSize = 32;
             header.px_dwFlags = 4;
             if (GetFormat(ref data) == 0xB)
@@ -111,17 +111,21 @@ namespace IWI2DDS
         {
             if (args.Length != 1)
             {
-                Console.WriteLine("Usage: IWI2DDS <input> <output>");
+                Console.WriteLine("Usage: IWI2DDS <input> or drag and drop file onto this exe");
                 Console.ReadKey(true);
             }
             var input = args[0];
             byte[] iwi_raw_data = IWI2DDS.ReadIWI(input);
             if (IWI2DDS.isValidIWI(ref iwi_raw_data)) //validate that its an iwi file
             {
-                int[] size = IWI2DDS.GetSize(ref iwi_raw_data);
+                int[] size = IWI2DDS.GetTextureSize(ref iwi_raw_data);
                 Console.WriteLine("Texture Size: " + size[0] + " x " + size[1]); //get texture size just to prove file is correct
                 IWI2DDS.SaveDDS(ref iwi_raw_data, Path.ChangeExtension(input, ".dds")); //create a .dds file with the same name only changed extension
+                Console.WriteLine("File converted press any key to continue..");
+                Console.ReadKey(true);
+                return;
             }
+            Console.WriteLine("Error converting file " + input);
             Console.ReadKey(true);
         }
     }
