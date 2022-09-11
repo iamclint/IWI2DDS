@@ -76,7 +76,8 @@ namespace IWI2DDS
         public int[] dwReserved1;
         public int px_dwSize;
         public int px_dwFlags;
-        public int dwFourCC;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public char[] dwFourCC;
         public int dwRGBBitCount;
         public int dwRBitMask;
         public int dwGBitMask;
