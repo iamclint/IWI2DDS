@@ -1,105 +1,247 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Drawing;
+using System.Drawing.Imaging;
+using Pfim;
+using SixLabors.ImageSharp.Processing.Processors.Quantization;
+using System.Data;
 
 namespace IWI2DDS
 {
 
     //function that reads iwi files
-    public static class IWI2DDS
+    public class IWI2DDS
     {
-
-        public static byte[] ReadIWI(string path)
+        IWI_HEADER iwi_header_data;
+        DDS_HEADER dds_header_data;
+        byte[] bytes;
+        bool noPicmip;
+        bool isSkyMap;
+        private T FromByteArray<T>(byte[] bytes, int offset, int size)
         {
-            byte[] iwi = System.IO.File.ReadAllBytes(path);
-            return iwi;
-        }
-
-        public static bool isValidIWI(ref byte[] data) //just validate that the file you are looking at is a valid iwi file (using ref so it doesn't copy all the bytes)
-        {
-            //Console.WriteLine(System.Text.Encoding.Default.GetString(data, 0, 3));
-            if (System.Text.Encoding.Default.GetString(data, 0, 3) != "IWi") //check first 4 bytes for the iwi5 string
-                return false;
-            return true;
-        }
-        
-        public static int[] GetTextureSize(ref byte[] data)
-        {
-            int[] rval = new int[2];
-            if (data.Length > 0x6)
-            {
-                rval[0] = BitConverter.ToInt16(data, 0x6);
-                rval[1] = BitConverter.ToInt16(data, 0x8);
-            }
-            return rval;
-        }
-
-        public static int GetTextureDataSize(ref byte[] data)
-        {
-            int file_size = BitConverter.ToInt32(data, 0xC); //file size
-            int texture_offset = BitConverter.ToInt32(data, 0x10); //texture offset
-            return file_size-texture_offset;
-        }
-        public static byte GetFormat(ref byte[] data)
-        {
-            return data[4];
-        }
-        public static byte GetUsage(ref byte[] data)
-        {
-            return data[5];
-        }
-        public static void SaveDDS(ref byte[] data, string output) //use ref so it doesn't make copies of the data, references it directly instead
-        {
-            //Generate the dds header
-            int[] texture_size = GetTextureSize(ref data);
-            DDS_HEADER header = new DDS_HEADER();
-            int magic = ('D' << 0) | ('D' << 8) | ('S' << 16) | (' ' << 24);
-            header.dwSize = 124;
-            header.dwFlags = (int)(DDS_FLAGS.DDSD_CAPS | DDS_FLAGS.DDSD_HEIGHT | DDS_FLAGS.DDSD_WIDTH | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_LINEARSIZE);
-            header.dwWidth = texture_size[0];
-            header.dwHeight = texture_size[1];
-            header.dwPitchOrLinearSize = GetTextureDataSize(ref data);
-            header.px_dwSize = 32;
-            header.px_dwFlags = 4;
-            if (GetFormat(ref data) == 0xB)
-                header.dwFourCC = ('D' << 0) | ('X' << 8) | ('T' << 16) | ('1' << 24); 
-            else
-                header.dwFourCC = ('D' << 0) | ('X' << 8) | ('T' << 16) | ('5' << 24);
-            header.dwCaps = 0x1000; //DDSCAPS_TEXTURE
-
-
-            //convert the header structure into a byte array so we can write it to file easily
-            byte[] header_array = new byte[124];
+            
             IntPtr ptr = IntPtr.Zero;
+            T s;
             try
             {
-                ptr = Marshal.AllocHGlobal(124); //creates a buffer with enough room for the entire structure
-                Marshal.StructureToPtr(header, ptr, false); //copies the structure data into allocated memory buffer 
-                Marshal.Copy(ptr, header_array, 0, 124); //copies that memory buffer do our managed byte array for later use
+                ptr = Marshal.AllocHGlobal(size);
+                Marshal.Copy(bytes, offset, ptr, size); 
+                s = (T)Marshal.PtrToStructure(ptr, typeof(T));
             }
             finally
             {
                 Marshal.FreeHGlobal(ptr); //frees up the memory it allocated
             }
+            return s;
+        }
+        
+        public IWI2DDS(string input)
+        {
+            bytes = System.IO.File.ReadAllBytes(input);
+            iwi_header_data = FromByteArray<IWI_HEADER>(bytes, 0, Marshal.SizeOf(iwi_header_data));
+            getPicmip();
+            Console.WriteLine("dimensions: " + iwi_header_data.dimensions[0] + " " + iwi_header_data.dimensions[1] + " " + iwi_header_data.dimensions[2] + " Flags: " + iwi_header_data.flags);
+            if (iwi_header_data.flags == 198)
+            {
+                isSkyMap = true;
+                Console.WriteLine("Is a sky map");
+            }
+        }
+        private void getPicmip()
+        {
+            if (isValidIWI())
+            {
+                if ((iwi_header_data.flags & 0x3) == 0x0)
+                {
+                    int r = iwi_header_data.dimensions[1];
+                    if (iwi_header_data.dimensions[0] <= iwi_header_data.dimensions[1])
+                        r = iwi_header_data.dimensions[0];
+                    if (r < 0x20)
+                        noPicmip = true;
+                }
+                else
+                {
+                    noPicmip = true;
+                }
+            }
+        }
+        public bool isValidIWI() //just validate that the file you are looking at is a valid iwi file (using ref so it doesn't copy all the bytes)
+        {
+            string x = new string(iwi_header_data.tag);
+            if (x != "IWi") //check the tag for IWi anything else is an invalid file
+                return false;
+            return true;
+        }
+
+        //converts the structure into a byte array
+        public static byte[] Serialize<T>(T s)
+            where T : struct
+        {
+            var size = Marshal.SizeOf(typeof(T));
+            var array = new byte[size];
+            var ptr = Marshal.AllocHGlobal(size);
+            Marshal.StructureToPtr(s, ptr, true);
+            Marshal.Copy(ptr, array, 0, size);
+            Marshal.FreeHGlobal(ptr);
+            return array;
+        }
+        //function to convert dds to bitmap
+        private MemoryStream GetTextureData()
+        {
+            int data_size = 0;
+            if (noPicmip) //dunno seems like we could just check nopicmip flag
+                data_size = bytes.Length - Marshal.SizeOf(iwi_header_data); //data size is file size - the header information for the texture if its a single texture file 
+            else
+                data_size = bytes.Length - iwi_header_data.texture_offset[0];
+
+            byte[] texture_data;
+            texture_data = new byte[data_size];
+            if (noPicmip) //if there isnt any picmip (copies in lower quality) get the entire file as data
+            {
+                Array.Copy(bytes, Marshal.SizeOf(iwi_header_data), texture_data, 0, data_size);
+            }
+            else
+                Array.Copy(bytes, iwi_header_data.texture_offset[0], texture_data, 0, data_size);
+            MemoryStream s = new MemoryStream(texture_data);
+            return s;
+        }
+
+        private MemoryStream GetDDS()
+        {
+            //open file for read
+
+            dds_header_data = new DDS_HEADER();
+            int data_size = 0;
+            if (noPicmip) //dunno seems like we could just check nopicmip flag
+                data_size = bytes.Length - Marshal.SizeOf(iwi_header_data); //data size is file size - the header information for the texture if its a single texture file 
+            else
+                data_size = bytes.Length - iwi_header_data.texture_offset[0];
+
+            int magic = ('D' << 0) | ('D' << 8) | ('S' << 16) | (' ' << 24);
+            dds_header_data.dwSize = Marshal.SizeOf(dds_header_data);
+            dds_header_data.dwFlags = (int)(DDS_FLAGS.DDSD_CAPS | DDS_FLAGS.DDSD_HEIGHT | DDS_FLAGS.DDSD_WIDTH | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_PIXELFORMAT | DDS_FLAGS.DDSD_LINEARSIZE);
+            dds_header_data.dwWidth = iwi_header_data.dimensions[0];
+            dds_header_data.dwHeight = iwi_header_data.dimensions[1];
+            dds_header_data.dwPitchOrLinearSize = data_size;
+            dds_header_data.px_dwSize = 32;
+            dds_header_data.px_dwFlags = 4;
+            if (iwi_header_data.format == (byte)IMG_FORMAT.DXT1)
+                dds_header_data.dwFourCC = ('D' << 0) | ('X' << 8) | ('T' << 16) | ('1' << 24);
+            else
+                dds_header_data.dwFourCC = ('D' << 0) | ('X' << 8) | ('T' << 16) | ('5' << 24);
+            dds_header_data.dwCaps = 0x1000; //DDSCAPS_TEXTURE
+
+            MemoryStream texture_data = GetTextureData();
+            /// Buffer x = new Buffer();
+            MemoryStream m = new MemoryStream();
+            byte[] magic_bytes = BitConverter.GetBytes(magic);
+            byte[] dds_data_bytes = Serialize<DDS_HEADER>(dds_header_data);
+            m.Write(magic_bytes, 0, magic_bytes.Length);
+            m.Write(dds_data_bytes, 0, dds_data_bytes.Length);
+            m.Write(texture_data.ToArray(), 0, (int)texture_data.Length);
+            texture_data.Close();
+            m.Seek(0, 0);
+            return m;
+        }
+
+        public void SaveDDS(string output) //use ref so it doesn't make copies of the data, references it directly instead
+        {
+            MemoryStream x = GetDDS();
+
+            using (BinaryWriter sw = new BinaryWriter(File.OpenWrite(Path.ChangeExtension(output, ".dds"))))
+            {
+                sw.Write(x.ReadAllBytes());
+                sw.Close();
+            }
+            x.Close();
+        }
+
+        private Bitmap getBitmap()
+        {
+            MemoryStream x = GetDDS();
+            using (var image = Pfimage.FromStream(x, new PfimConfig()))
+            {
+                x.Close();
+                PixelFormat format;
+                // Convert from Pfim's backend agnostic image format into GDI+'s image format
+                switch (image.Format)
+                {
+                    case Pfim.ImageFormat.Rgba32:
+                        format = PixelFormat.Format32bppArgb;
+                        break;
+                    default:
+                        // see the sample for more details
+                        throw new NotImplementedException();
+                }
+
+                // Pin pfim's data array so that it doesn't get reaped by GC, unnecessary
+                // in this snippet but useful technique if the data was going to be used in
+                byte[] data_ptr = image.Data;
+                image.Data.CopyTo(data_ptr, 0);
+                var handle = GCHandle.Alloc(data_ptr, GCHandleType.Pinned);
+                try
+                {
+                    var data = Marshal.UnsafeAddrOfPinnedArrayElement(data_ptr, 0);
+                    var bitmap = new Bitmap(image.Width, image.Height, image.Stride, format, data);
+                    return bitmap;
+                }
+                finally
+                {
+                    handle.Free();
+                }
+
+            }
             
-            int texture_offset = BitConverter.ToInt32(data, 0x10); //texture offset, there are also mipmaps i ignored for now.
-            int size = data.Length - texture_offset; //Best I can tell is texture offset at 0x10 contains the index in the file where the texture actually starts (header ends)
-            byte[] texture_data = new byte[size];
-            Array.Copy(data, texture_offset, texture_data, 0, size); //copy the data from the texture offset forward
 
-            //write the data to file
-            BinaryWriter ddsfile = new BinaryWriter(File.OpenWrite(output));
-            ddsfile.Write(magic);
-            ddsfile.Write(header_array);
-            ddsfile.Write(texture_data);
-            ddsfile.Close();
+        }
 
+
+        public void SaveTGA(string output)
+        {
+            Bitmap p = getBitmap();
+            TGASharpLib.TGA tga = new TGASharpLib.TGA(p);
+            tga.Save(Path.ChangeExtension(output, "tga"));
+        }
+     
+        public void SavePNG(string output)
+        {
+            MemoryStream x = GetDDS();
+            using (var image = Pfimage.FromStream(x, new PfimConfig()))
+            {
+                PixelFormat format;
+                // Convert from Pfim's backend agnostic image format into GDI+'s image format
+                switch (image.Format)
+                {
+                    case Pfim.ImageFormat.Rgba32:
+                        format = PixelFormat.Format32bppArgb;
+                        break;
+                    default:
+                        // see the sample for more details
+                        throw new NotImplementedException();
+                }
+
+                // Pin pfim's data array so that it doesn't get reaped by GC, unnecessary
+                // in this snippet but useful technique if the data was going to be used in
+                // control like a picture box
+                byte[] data_ptr = image.Data;
+                image.Data.CopyTo(data_ptr, 0);
+                var handle = GCHandle.Alloc(data_ptr, GCHandleType.Pinned);
+                try
+                {
+                    var data = Marshal.UnsafeAddrOfPinnedArrayElement(data_ptr, 0);
+                    var bitmap = new Bitmap(image.Width, image.Height, image.Stride, format, data);
+                    bitmap.Save(Path.ChangeExtension(output, ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                }
+                finally
+                {
+                    handle.Free();
+                }
+                
+
+            }
+            x.Close();
+           
         }
 
     }
@@ -109,23 +251,30 @@ namespace IWI2DDS
         
         static void Main(string[] args)
         {
-            if (args.Length != 1)
+            //if (args.Length != 1)
+            //{
+            //    Console.WriteLine("Usage: IWI2DDS <input> or drag and drop file onto this exe");
+            //    Console.ReadKey(true);
+            //}
+            string path = "";
+            if (args.Length == 0)
+                path = "loggi.iwi";
+            else
+                path = args[0];
+            IWI2DDS iwi = new IWI2DDS(path);
+            if (iwi.isValidIWI()) //validate that its an iwi file
             {
-                Console.WriteLine("Usage: IWI2DDS <input> or drag and drop file onto this exe");
-                Console.ReadKey(true);
-            }
-            var input = args[0];
-            byte[] iwi_raw_data = IWI2DDS.ReadIWI(input);
-            if (IWI2DDS.isValidIWI(ref iwi_raw_data)) //validate that its an iwi file
-            {
-                int[] size = IWI2DDS.GetTextureSize(ref iwi_raw_data);
-                Console.WriteLine("Texture Size: " + size[0] + " x " + size[1]); //get texture size just to prove file is correct
-                IWI2DDS.SaveDDS(ref iwi_raw_data, Path.ChangeExtension(input, ".dds")); //create a .dds file with the same name only changed extension
-                Console.WriteLine("File converted press any key to continue..");
+                Console.WriteLine("Converting to DDS");
+                iwi.SaveDDS(path);
+                //Console.WriteLine("Converting to PNG");
+                //iwi.SavePNG(path); //for some reason the pmif lib doesn't like you doing this twice so to png or to tga but not both?? causes memory error
+                Console.WriteLine("Converting to TGA"); 
+                iwi.SaveTGA(path);
+                
+                Console.WriteLine("Completed, press any key to continue");
                 Console.ReadKey(true);
                 return;
             }
-            Console.WriteLine("Error converting file " + input);
             Console.ReadKey(true);
         }
     }
