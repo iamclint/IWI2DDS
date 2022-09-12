@@ -11,7 +11,6 @@ using System.Text;
 
 namespace IWI2DDS
 {
-
     internal class Program
     {
         
@@ -23,10 +22,10 @@ namespace IWI2DDS
                 //single test
                 path = "test2.iwi";
                 IWI2DDS iwi = new IWI2DDS(path);
-                if (iwi.isValidIWI()) //validate that its an iwi file
+                if (iwi.isValidIWI())
                 {
                     iwi.printData();
-                    iwi.savePNG(path); //for some reason the pmif lib doesn't like you doing this twice so to png or to tga but not both?? causes memory error
+                    iwi.savePNG(path); 
                 }
             }
             else
